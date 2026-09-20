@@ -1,10 +1,12 @@
 import os
 import discord
+import asyncio
+import edge_tts
 from supabase import create_client, Client
 from google import genai
 from google.genai import types
 
-# 1. المتغيرات
+# 1. المتغيرات ومفاتيح البيئة
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
@@ -21,18 +23,18 @@ client = discord.Client(intents=intents)
 SYSTEM_INSTRUCTION = """أنت مساعد دراسي ذكي ومفيد لأحمد، طالب في الصف التاسع في طرابلس، ليبيا.
 تساعده في فهم الدروس، حل التمارين، وتنظيم وقته للدراسة.
 لهجتك ليبية محببة وواضحة.
-أمامك ملف الكتاب المدرسي الكامل مرفق مع المحادثة. اعتمد عليه كمرجع أساسي وأول لإجابة جميع أسئلة الطالب واستخراج الحلول والتمارين منه بدقة."""
+أمامك ملف الكتاب المدرسي الكامل المرفق في المحادثة، استخدمه لاستخراج الحلول والتمارين بدقة كمرجع أساسي."""
 
-# متغير عام لحفظ مرجع الكتاب في ذاكرة البوت
+# متغير عام لحفظ مرجع الكتاب
 uploaded_book_file = None
 
 @client.event
 async def on_ready():
     global uploaded_book_file
-    print(f'✅ البوت {client.user} جاهز ومتصل!')
+    print(f'✅ البوت {client.user} جاهز ومتصل، ويدعم الصوت!')
     
-    # رفع كتاب الـ PDF لـ Gemini عند تشغيل البوت
-    book_path = "math_grade9.pdf"
+    # تحميل ملف الـ PDF لـ Gemini عند بدء التشغيل
+    book_path = "math_grade9.pdf" # تأكد من اسم الكتاب هنا
     if os.path.exists(book_path):
         try:
             print("⏳ جاري رفع الكتاب المدرسي الكامل إلى Gemini...")
@@ -41,7 +43,7 @@ async def on_ready():
         except Exception as e:
             print(f"❌ خطأ أثناء رفع ملف الكتاب: {e}")
     else:
-        print("⚠️ ملف book.pdf غير موجود في مجلد المشروع، حايخدم البوت بدون كتاب مرفق.")
+        print(f"⚠️ ملف {book_path} غير موجود. البوت سيخدم بدونه.")
 
 @client.event
 async def on_message(message):
@@ -49,40 +51,73 @@ async def on_message(message):
         return
     
     if client.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
+        
+        # استخراج النص إن وجد
         user_msg = message.clean_content.replace(f'@{client.user.name}', '').strip()
         user_id = str(message.author.id)
         
-        if not user_msg:
+        # التأكد إذا كان أحمد باعت رسالة صوتية
+        uploaded_audio_part = None
+        if message.attachments:
+            for att in message.attachments:
+                # لو المرفق ملف صوتي (Voice Note)
+                if att.content_type and att.content_type.startswith('audio'):
+                    audio_path = f"temp_{att.filename}"
+                    await att.save(audio_path)
+                    try:
+                        # رفع الصوت لـ Gemini باش يسمعه
+                        gemini_audio = ai_client.files.upload(file=audio_path)
+                        uploaded_audio_part = gemini_audio
+                    except Exception as e:
+                        print(f"Error uploading audio to Gemini: {e}")
+                    finally:
+                        if os.path.exists(audio_path):
+                            os.remove(audio_path) # حذف الملف المؤقت
+                    break
+
+        if not user_msg and not uploaded_audio_part:
             return
 
+        db_msg = user_msg if user_msg else "[أحمد أرسل رسالة صوتية]"
+
         try:
-            # 1. حفظ رسالة المستخدم في Supabase
+            # 1. حفظ رسالة المستخدم في قاعدة البيانات
             supabase.table('chat_history').insert({
                 "user_id": user_id,
                 "role": "user",
-                "content": user_msg
+                "content": db_msg
             }).execute()
 
-            # 2. جلب آخر 6 رسائل من ذاكرة المحادثة
+            # 2. جلب آخر رسائل من الذاكرة
             response = supabase.table('chat_history').select("*").eq("user_id", user_id).order("created_at", desc=True).limit(6).execute()
             history_data = reversed(response.data)
             
             contents = []
             
-            # إرفاق الكتاب الكامل في بداية المحادثة ليكون مرجعاً لـ Gemini
+            # إرفاق الكتاب إن وجد
             if uploaded_book_file:
                 contents.append(uploaded_book_file)
 
-            # إضافة سجل المحادثة
-            for row in history_data:
-                contents.append(
-                    types.Content(
-                        role=row["role"], 
-                        parts=[types.Part.from_text(text=row["content"])]
-                    )
-                )
+            # إرفاق الرسالة الصوتية اللي بعثها أحمد (إن وجدت)
+            if uploaded_audio_part:
+                contents.append(uploaded_audio_part)
 
-            # 3. توليد الرد من Gemini 3.6 Flash اعتماداً على الكتاب والذاكرة
+            # تجهيز الذاكرة
+            for row in history_data:
+                # نتجاهل إضافة "[أحمد أرسل رسالة صوتية]" للسياق كنص، لأننا أرسلنا الصوت الفعلي
+                if row["content"] != "[أحمد أرسل رسالة صوتية]":
+                    contents.append(
+                        types.Content(
+                            role=row["role"], 
+                            parts=[types.Part.from_text(text=row["content"])]
+                        )
+                    )
+            
+            # إضافة نص الرسالة الحالية لو كان باعت نص مع الصوت
+            if user_msg:
+                contents.append(user_msg)
+
+            # 3. توليد الرد من Gemini
             gemini_response = ai_client.models.generate_content(
                 model='gemini-3.6-flash',
                 contents=contents,
@@ -92,19 +127,27 @@ async def on_message(message):
             )
             reply_text = gemini_response.text
 
-            # 4. حفظ رد البوت في Supabase
+            # 4. حفظ الرد في قاعدة البيانات
             supabase.table('chat_history').insert({
                 "user_id": user_id,
                 "role": "model",
                 "content": reply_text
             }).execute()
 
-            # 5. إرسال الرد للديسكورد
+            # 5. تحويل الرد النصي إلى رسالة صوتية باستخدام edge-tts (صوت ليبي)
+            audio_reply_path = f"reply_{message.id}.mp3"
+            communicate = edge_tts.Communicate(reply_text, "ar-LY-OmarNeural")
+            await communicate.save(audio_reply_path)
+
+            # 6. إرسال النص + الرسالة الصوتية لأحمد
             if len(reply_text) > 2000:
-                for i in range(0, len(reply_text), 2000):
-                    await message.reply(reply_text[i:i+2000])
+                await message.reply(reply_text[:1990] + "...", file=discord.File(audio_reply_path))
             else:
-                await message.reply(reply_text)
+                await message.reply(reply_text, file=discord.File(audio_reply_path))
+                
+            # حذف الملف الصوتي بعد الإرسال لتنظيف السيرفر
+            if os.path.exists(audio_reply_path):
+                os.remove(audio_reply_path)
 
         except Exception as e:
             print(f"Error: {e}")
