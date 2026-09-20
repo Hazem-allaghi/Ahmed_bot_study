@@ -34,7 +34,7 @@ async def on_ready():
     print(f'✅ البوت {client.user} جاهز ومتصل، ويدعم الصوت!')
     
     # تحميل ملف الـ PDF لـ Gemini عند بدء التشغيل
-    book_path = "math_grade9.pdf" # تأكد من اسم الكتاب هنا
+    book_path = "math_grade9.pdf" # تأكد من اسم ملف كتابك في GitHub
     if os.path.exists(book_path):
         try:
             print("⏳ جاري رفع الكتاب المدرسي الكامل إلى Gemini...")
@@ -56,16 +56,14 @@ async def on_message(message):
         user_msg = message.clean_content.replace(f'@{client.user.name}', '').strip()
         user_id = str(message.author.id)
         
-        # التأكد إذا كان أحمد باعت رسالة صوتية
+        # معالجة المرفق الصوتي إن وجد
         uploaded_audio_part = None
         if message.attachments:
             for att in message.attachments:
-                # لو المرفق ملف صوتي (Voice Note)
                 if att.content_type and att.content_type.startswith('audio'):
                     audio_path = f"temp_{message.id}.ogg"
                     await att.save(audio_path)
                     try:
-                        # رفع الصوت لـ Gemini مع تحديد نوع الملف
                         gemini_audio = ai_client.files.upload(
                             file=audio_path,
                             config={'mime_type': 'audio/ogg'}
@@ -75,7 +73,7 @@ async def on_message(message):
                         print(f"Error uploading audio to Gemini: {e}")
                     finally:
                         if os.path.exists(audio_path):
-                            os.remove(audio_path) # حذف الملف المؤقت
+                            os.remove(audio_path)
                     break
 
         if not user_msg and not uploaded_audio_part:
@@ -84,42 +82,51 @@ async def on_message(message):
         db_msg = user_msg if user_msg else "[أحمد أرسل رسالة صوتية]"
 
         try:
-            # 1. حفظ رسالة المستخدم في قاعدة البيانات
+            # 1. جلب السجل القديم أولاً (قبل إضافة الرسالة الحالية)
+            response = supabase.table('chat_history').select("*").eq("user_id", user_id).order("created_at", desc=True).limit(6).execute()
+            history_data = list(reversed(response.data))
+
+            # 2. حفظ رسالة المستخدم الحالية في السجل
             supabase.table('chat_history').insert({
                 "user_id": user_id,
                 "role": "user",
                 "content": db_msg
             }).execute()
 
-            # 2. جلب آخر رسائل من الذاكرة
-            response = supabase.table('chat_history').select("*").eq("user_id", user_id).order("created_at", desc=True).limit(6).execute()
-            history_data = reversed(response.data)
-            
+            # 3. بناء قائمة Contents بالشكل الصحيح المطلوبة لـ Gemini
             contents = []
-            
-            # إرفاق الكتاب إن وجد
+
+            # إرفاق الكتاب كمرجع أول إن وجد
             if uploaded_book_file:
                 contents.append(uploaded_book_file)
 
-            # إرفاق الرسالة الصوتية اللي بعثها أحمد (إن وجدت)
-            if uploaded_audio_part:
-                contents.append(uploaded_audio_part)
-
-            # تجهيز الذاكرة
+            # إرفاق المحادثات السابقة
             for row in history_data:
-                if row["content"] != "[أحمد أرسل رسالة صوتية]":
+                if row["content"] and row["content"].strip():
                     contents.append(
                         types.Content(
-                            role=row["role"], 
+                            role=row["role"],
                             parts=[types.Part.from_text(text=row["content"])]
                         )
                     )
-            
-            # إضافة نص الرسالة الحالية لو كان باعت نص مع الصوت
-            if user_msg:
-                contents.append(user_msg)
 
-            # 3. توليد الرد من Gemini (بالطريقة المستقرة)
+            # بناء وتأكيد طرف المستخدم الحالي (User Turn) في نهاية القائمة دائماً
+            current_user_parts = []
+            if uploaded_audio_part:
+                current_user_parts.append(uploaded_audio_part)
+            if user_msg:
+                current_user_parts.append(types.Part.from_text(text=user_msg))
+            elif uploaded_audio_part and not user_msg:
+                current_user_parts.append(types.Part.from_text(text="استمع للرسالة الصوتية وأجب عليها."))
+
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=current_user_parts
+                )
+            )
+
+            # 4. طلب الإجابة من Gemini
             gemini_response = ai_client.models.generate_content(
                 model='gemini-3.6-flash',
                 contents=contents,
@@ -129,25 +136,23 @@ async def on_message(message):
             )
             reply_text = gemini_response.text
 
-            # 4. حفظ الرد في قاعدة البيانات
+            # 5. حفظ الرد في قاعدة البيانات
             supabase.table('chat_history').insert({
                 "user_id": user_id,
                 "role": "model",
                 "content": reply_text
             }).execute()
 
-            # 5. تحويل الرد النصي إلى رسالة صوتية
+            # 6. تحويل الرد إلى صوت بصوت "عمر" الليبي وإرساله
             audio_reply_path = f"reply_{message.id}.mp3"
             communicate = edge_tts.Communicate(reply_text, "ar-LY-OmarNeural")
             await communicate.save(audio_reply_path)
 
-            # 6. إرسال النص + الرسالة الصوتية لأحمد
             if len(reply_text) > 2000:
                 await message.reply(reply_text[:1990] + "...", file=discord.File(audio_reply_path))
             else:
                 await message.reply(reply_text, file=discord.File(audio_reply_path))
                 
-            # تنظيف السيرفر
             if os.path.exists(audio_reply_path):
                 os.remove(audio_reply_path)
 
