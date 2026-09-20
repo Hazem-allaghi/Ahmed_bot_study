@@ -57,7 +57,7 @@ async def on_message(message):
         user_id = str(message.author.id)
         
         # معالجة المرفق الصوتي إن وجد
-        uploaded_audio_part = None
+        audio_part = None
         if message.attachments:
             for att in message.attachments:
                 if att.content_type and att.content_type.startswith('audio'):
@@ -68,7 +68,11 @@ async def on_message(message):
                             file=audio_path,
                             config={'mime_type': 'audio/ogg'}
                         )
-                        uploaded_audio_part = gemini_audio
+                        # تحويل الملف المرفوع إلى Part عبر الـ URI
+                        audio_part = types.Part.from_uri(
+                            uri=gemini_audio.uri,
+                            mime_type=gemini_audio.mime_type or 'audio/ogg'
+                        )
                     except Exception as e:
                         print(f"Error uploading audio to Gemini: {e}")
                     finally:
@@ -76,31 +80,27 @@ async def on_message(message):
                             os.remove(audio_path)
                     break
 
-        if not user_msg and not uploaded_audio_part:
+        if not user_msg and not audio_part:
             return
 
         db_msg = user_msg if user_msg else "[أحمد أرسل رسالة صوتية]"
 
         try:
-            # 1. جلب السجل القديم أولاً (قبل إضافة الرسالة الحالية)
+            # 1. جلب السجل القديم من Supabase
             response = supabase.table('chat_history').select("*").eq("user_id", user_id).order("created_at", desc=True).limit(6).execute()
             history_data = list(reversed(response.data))
 
-            # 2. حفظ رسالة المستخدم الحالية في السجل
+            # 2. حفظ رسالة المستخدم الحالية
             supabase.table('chat_history').insert({
                 "user_id": user_id,
                 "role": "user",
                 "content": db_msg
             }).execute()
 
-            # 3. بناء قائمة Contents بالشكل الصحيح المطلوبة لـ Gemini
+            # 3. بناء قائمة Contents
             contents = []
 
-            # إرفاق الكتاب كمرجع أول إن وجد
-            if uploaded_book_file:
-                contents.append(uploaded_book_file)
-
-            # إرفاق المحادثات السابقة
+            # إضافة المحادثات السابقة كـ Content objects
             for row in history_data:
                 if row["content"] and row["content"].strip():
                     contents.append(
@@ -110,15 +110,29 @@ async def on_message(message):
                         )
                     )
 
-            # بناء وتأكيد طرف المستخدم الحالي (User Turn) في نهاية القائمة دائماً
+            # تجهيز أجزاء طلب المستخدم الحالي (Current Turn Parts)
             current_user_parts = []
-            if uploaded_audio_part:
-                current_user_parts.append(uploaded_audio_part)
+
+            # إرفاق الكتاب إذا كان مرفوعاً (تحويله لـ Part)
+            if uploaded_book_file:
+                current_user_parts.append(
+                    types.Part.from_uri(
+                        uri=uploaded_book_file.uri,
+                        mime_type=uploaded_book_file.mime_type or 'application/pdf'
+                    )
+                )
+
+            # إرفاق الجزء الصوتي إن وجد
+            if audio_part:
+                current_user_parts.append(audio_part)
+
+            # إرفاق النص إن وجد
             if user_msg:
                 current_user_parts.append(types.Part.from_text(text=user_msg))
-            elif uploaded_audio_part and not user_msg:
-                current_user_parts.append(types.Part.from_text(text="استمع للرسالة الصوتية وأجب عليها."))
+            elif audio_part and not user_msg:
+                current_user_parts.append(types.Part.from_text(text="استمع للرسالة الصوتية وأجب عليها من الكتاب المدرسي."))
 
+            # إضافة الطلب الحالي
             contents.append(
                 types.Content(
                     role="user",
