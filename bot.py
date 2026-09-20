@@ -4,41 +4,51 @@ from supabase import create_client, Client
 from google import genai
 from google.genai import types
 
-# 1. جلب مفاتيح الربط من المتغيرات (Environment Variables)
+# 1. المتغيرات
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
-# 2. تجهيز الاتصال بقاعدة بيانات Supabase
+# 2. إعداد الاتصالات
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# 3. تجهيز الاتصال بـ Google Gemini
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 4. إعدادات بوت ديسكورد
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-# تعليمات النظام (الشخصية اللي حيتقمصها البوت)
 SYSTEM_INSTRUCTION = """أنت مساعد دراسي ذكي ومفيد لأحمد، طالب في الصف التاسع في طرابلس، ليبيا.
-تساعده في فهم الدروس، حل التمارين، وتنظيم وقته للدراسة. 
-لهجتك ليبية محببة وواضحة، وتشجعه دائماً على التفوق وتجاوز الصعوبات."""
+تساعده في فهم الدروس، حل التمارين، وتنظيم وقته للدراسة.
+لهجتك ليبية محببة وواضحة.
+أمامك ملف الكتاب المدرسي الكامل مرفق مع المحادثة. اعتمد عليه كمرجع أساسي وأول لإجابة جميع أسئلة الطالب واستخراج الحلول والتمارين منه بدقة."""
+
+# متغير عام لحفظ مرجع الكتاب في ذاكرة البوت
+uploaded_book_file = None
 
 @client.event
 async def on_ready():
-    print(f'✅ البوت {client.user} متصل وجاهز للعمل!')
+    global uploaded_book_file
+    print(f'✅ البوت {client.user} جاهز ومتصل!')
+    
+    # رفع كتاب الـ PDF لـ Gemini عند تشغيل البوت
+    book_path = "math_grade9.pdf"
+    if os.path.exists(book_path):
+        try:
+            print("⏳ جاري رفع الكتاب المدرسي الكامل إلى Gemini...")
+            uploaded_book_file = ai_client.files.upload(file=book_path)
+            print(f"🎉 تم تحميل الكتاب بنجاح: {uploaded_book_file.name}")
+        except Exception as e:
+            print(f"❌ خطأ أثناء رفع ملف الكتاب: {e}")
+    else:
+        print("⚠️ ملف book.pdf غير موجود في مجلد المشروع، حايخدم البوت بدون كتاب مرفق.")
 
 @client.event
 async def on_message(message):
-    # عشان البوت ما يردش على نفسه
     if message.author == client.user:
         return
     
-    # البوت يرد لو حد دارله منشن (Mention) أو في رسائل الخاص (DM)
     if client.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
-        # تنظيف الرسالة من اسم البوت
         user_msg = message.clean_content.replace(f'@{client.user.name}', '').strip()
         user_id = str(message.author.id)
         
@@ -46,19 +56,24 @@ async def on_message(message):
             return
 
         try:
-            # 1. حفظ رسالة المستخدم في Supabase (جدول chat_history)
+            # 1. حفظ رسالة المستخدم في Supabase
             supabase.table('chat_history').insert({
                 "user_id": user_id,
                 "role": "user",
                 "content": user_msg
             }).execute()
 
-            # 2. جلب آخر 10 رسائل من الذاكرة باش البوت يتذكر سياق الكلام
-            response = supabase.table('chat_history').select("*").eq("user_id", user_id).order("created_at", desc=True).limit(10).execute()
-            history_data = reversed(response.data) # ترتيبها من الأقدم للأحدث
+            # 2. جلب آخر 6 رسائل من ذاكرة المحادثة
+            response = supabase.table('chat_history').select("*").eq("user_id", user_id).order("created_at", desc=True).limit(6).execute()
+            history_data = reversed(response.data)
             
-            # 3. تجهيز الذاكرة لـ Gemini
             contents = []
+            
+            # إرفاق الكتاب الكامل في بداية المحادثة ليكون مرجعاً لـ Gemini
+            if uploaded_book_file:
+                contents.append(uploaded_book_file)
+
+            # إضافة سجل المحادثة
             for row in history_data:
                 contents.append(
                     types.Content(
@@ -67,7 +82,7 @@ async def on_message(message):
                     )
                 )
 
-            # 4. إرسال المحادثة لـ Gemini 3.6 Flash وتلقي الرد
+            # 3. توليد الرد من Gemini 3.6 Flash اعتماداً على الكتاب والذاكرة
             gemini_response = ai_client.models.generate_content(
                 model='gemini-3.6-flash',
                 contents=contents,
@@ -77,14 +92,14 @@ async def on_message(message):
             )
             reply_text = gemini_response.text
 
-            # 5. حفظ رد البوت في Supabase
+            # 4. حفظ رد البوت في Supabase
             supabase.table('chat_history').insert({
                 "user_id": user_id,
                 "role": "model",
                 "content": reply_text
             }).execute()
 
-            # 6. إرسال الرد للديسكورد (مع تقسيم الرسالة لو كانت طويلة جداً)
+            # 5. إرسال الرد للديسكورد
             if len(reply_text) > 2000:
                 for i in range(0, len(reply_text), 2000):
                     await message.reply(reply_text[i:i+2000])
@@ -95,5 +110,4 @@ async def on_message(message):
             print(f"Error: {e}")
             await message.reply("معليش يا أحمد، واجهتني مشكلة تقنية صغيرة توا. حاول مرة ثانية!")
 
-# تشغيل البوت
 client.run(DISCORD_TOKEN)
