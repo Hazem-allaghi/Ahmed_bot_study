@@ -62,11 +62,14 @@ async def on_message(message):
             for att in message.attachments:
                 # لو المرفق ملف صوتي (Voice Note)
                 if att.content_type and att.content_type.startswith('audio'):
-                    audio_path = f"temp_{att.filename}"
+                    audio_path = f"temp_{message.id}.ogg"
                     await att.save(audio_path)
                     try:
-                        # رفع الصوت لـ Gemini باش يسمعه
-                        gemini_audio = ai_client.files.upload(file=audio_path)
+                        # رفع الصوت لـ Gemini مع تحديد نوع الملف
+                        gemini_audio = ai_client.files.upload(
+                            file=audio_path,
+                            config={'mime_type': 'audio/ogg'}
+                        )
                         uploaded_audio_part = gemini_audio
                     except Exception as e:
                         print(f"Error uploading audio to Gemini: {e}")
