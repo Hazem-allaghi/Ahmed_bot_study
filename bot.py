@@ -117,12 +117,15 @@ async def on_message(message):
             if user_msg:
                 contents.append(user_msg)
 
-            # 3. توليد الرد من Gemini
+           # 3. توليد الرد من Gemini
             gemini_response = ai_client.models.generate_content(
                 model='gemini-3.6-flash',
                 contents=contents,
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
+                )
+            )
+            reply_text = gemini_response.text,
                 )
             )
             reply_text = gemini_response.text
