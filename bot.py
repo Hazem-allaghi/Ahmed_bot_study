@@ -104,7 +104,6 @@ async def on_message(message):
 
             # تجهيز الذاكرة
             for row in history_data:
-                # نتجاهل إضافة "[أحمد أرسل رسالة صوتية]" للسياق كنص، لأننا أرسلنا الصوت الفعلي
                 if row["content"] != "[أحمد أرسل رسالة صوتية]":
                     contents.append(
                         types.Content(
@@ -117,15 +116,12 @@ async def on_message(message):
             if user_msg:
                 contents.append(user_msg)
 
-           # 3. توليد الرد من Gemini
+            # 3. توليد الرد من Gemini (بالطريقة المستقرة)
             gemini_response = ai_client.models.generate_content(
                 model='gemini-3.6-flash',
                 contents=contents,
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
-                )
-            )
-            reply_text = gemini_response.text,
                 )
             )
             reply_text = gemini_response.text
@@ -137,7 +133,7 @@ async def on_message(message):
                 "content": reply_text
             }).execute()
 
-            # 5. تحويل الرد النصي إلى رسالة صوتية باستخدام edge-tts (صوت ليبي)
+            # 5. تحويل الرد النصي إلى رسالة صوتية
             audio_reply_path = f"reply_{message.id}.mp3"
             communicate = edge_tts.Communicate(reply_text, "ar-LY-OmarNeural")
             await communicate.save(audio_reply_path)
@@ -148,7 +144,7 @@ async def on_message(message):
             else:
                 await message.reply(reply_text, file=discord.File(audio_reply_path))
                 
-            # حذف الملف الصوتي بعد الإرسال لتنظيف السيرفر
+            # تنظيف السيرفر
             if os.path.exists(audio_reply_path):
                 os.remove(audio_reply_path)
 
