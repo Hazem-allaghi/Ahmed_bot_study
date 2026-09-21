@@ -1,6 +1,5 @@
 import os
 import discord
-import asyncio
 import edge_tts
 from supabase import create_client, Client
 from google import genai
@@ -40,9 +39,9 @@ async def on_ready():
             uploaded_book_file = ai_client.files.upload(file=book_path)
             print(f"🎉 تم تحميل الكتاب بنجاح: {uploaded_book_file.name}")
         except Exception as e:
-            print(f"⚠️ فشل رفع الكتاب، وسيعمل البوت بدونه: {e}")
+            print(f"⚠️ فشل رفع الكتاب: {e}")
     else:
-        print(f"⚠️ الملف {book_path} غير موجود في المجلد. سيعمل البوت بشكل طبيعي بدون كتاب.")
+        print(f"⚠️ الملف {book_path} غير موجود.")
 
 @client.event
 async def on_message(message):
@@ -55,7 +54,7 @@ async def on_message(message):
         user_msg = message.clean_content.replace(f'@{client.user.name}', '').strip()
         user_id = str(message.author.id)
         
-        # معالجة الملف الصوتي إن وجد
+        # 1. معالجة الملف الصوتي إن وجد
         gemini_audio_file = None
         if message.attachments:
             for att in message.attachments:
@@ -80,7 +79,7 @@ async def on_message(message):
         db_msg = user_msg if user_msg else "[رسالة صوتية]"
 
         try:
-            # 1. جلب المحادثات السابقة من Supabase
+            # 2. جلب المحادثات السابقة من Supabase
             history_data = []
             try:
                 response = supabase.table('chat_history').select("*").eq("user_id", user_id).order("created_at", desc=True).limit(6).execute()
@@ -88,7 +87,7 @@ async def on_message(message):
             except Exception as e:
                 print(f"Supabase Fetch Error: {e}")
 
-            # 2. حفظ رسالة المستخدم الحالية
+            # 3. حفظ رسالة المستخدم الحالية
             try:
                 supabase.table('chat_history').insert({
                     "user_id": user_id,
@@ -98,54 +97,56 @@ async def on_message(message):
             except Exception as e:
                 print(f"Supabase Insert Error: {e}")
 
-            # 3. بناء قائمة Contents
-            contents = []
-
-            # إضافة المحادثات السابقة
+            # 4. بناء الذاكرة (History) بتنسيق خالي من الأخطاء
+            history_contents = []
+            last_role = None
             for row in history_data:
-                if row.get("content") and str(row["content"]).strip():
-                    contents.append(
+                content_text = row.get("content", "").strip()
+                current_role = row["role"]
+                
+                if not content_text:
+                    continue
+                    
+                # منع خطأ Gemini عند تكرار نفس الدور مرتين متتاليتين
+                if current_role == last_role and history_contents:
+                    history_contents[-1].parts[0].text += f"\n{content_text}"
+                else:
+                    history_contents.append(
                         types.Content(
-                            role=row["role"],
-                            parts=[types.Part.from_text(text=row["content"])]
+                            role=current_role,
+                            parts=[types.Part.from_text(text=content_text)]
                         )
                     )
+                    last_role = current_role
 
-            # تجهيز الطلب الحالي للمستخدم
-            current_parts = []
-
-            # إضافة الكتاب كـ File Object مباشرة (طريقة مكتبة google-genai الرسمية)
-            if uploaded_book_file:
-                current_parts.append(uploaded_book_file)
-
-            # إضافة الملف الصوتي كـ File Object مباشرة
-            if gemini_audio_file:
-                current_parts.append(gemini_audio_file)
-
-            # إضافة النص
-            if user_msg:
-                current_parts.append(types.Part.from_text(text=user_msg))
-            elif gemini_audio_file and not user_msg:
-                current_parts.append(types.Part.from_text(text="استمع للرسالة الصوتية وأجب عليها من الكتاب المدرسي."))
-
-            contents.append(
-                types.Content(
-                    role="user",
-                    parts=current_parts
-                )
-            )
-
-            # 4. طلب الإجابة من Gemini
-            gemini_response = ai_client.models.generate_content(
+            # 5. إنشاء جلسة محادثة ذكية (تُخفي تحذير AFC تلقائياً)
+            chat = ai_client.chats.create(
                 model='gemini-3.6-flash',
-                contents=contents,
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
-                )
+                ),
+                history=history_contents
             )
+
+            # 6. تجهيز الطلب الحالي (ملفات + نص) ورميها مباشرة للمكتبة لتعالجها
+            current_message_payload = []
+            
+            if uploaded_book_file:
+                current_message_payload.append(uploaded_book_file)
+                
+            if gemini_audio_file:
+                current_message_payload.append(gemini_audio_file)
+                
+            if user_msg:
+                current_message_payload.append(user_msg)
+            elif gemini_audio_file and not user_msg:
+                current_message_payload.append("استمع للرسالة الصوتية وأجب عليها من الكتاب المدرسي.")
+
+            # 7. إرسال الطلب
+            gemini_response = chat.send_message(current_message_payload)
             reply_text = gemini_response.text
 
-            # 5. حفظ الرد في Supabase
+            # 8. حفظ رد البوت في Supabase
             try:
                 supabase.table('chat_history').insert({
                     "user_id": user_id,
@@ -155,7 +156,7 @@ async def on_message(message):
             except Exception as e:
                 print(f"Supabase Save Reply Error: {e}")
 
-            # 6. توليد الصوت وإرسال الرد
+            # 9. توليد الصوت وإرسال الرد لأحمد
             audio_reply_path = f"reply_{message.id}.mp3"
             try:
                 communicate = edge_tts.Communicate(reply_text, "ar-LY-OmarNeural")
@@ -177,6 +178,6 @@ async def on_message(message):
 
         except Exception as e:
             print(f"General Error: {e}")
-            await message.reply("معليش يا أحمد، واجهتني مشكلة تقنية صغيرة توا. حاول مرة ثانية!")
+            await message.reply(f"معليش يا أحمد، واجهتني مشكلة تقنية صغيرة توا: {e}")
 
 client.run(DISCORD_TOKEN)
