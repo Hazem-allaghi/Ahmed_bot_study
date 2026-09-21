@@ -20,53 +20,43 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-# 3. التعليمات الصارمة لمنع الهلوسة
+# 3. التعليمات الصارمة
 SYSTEM_INSTRUCTION = """أنت مساعد دراسي ذكي ومفيد لأحمد، طالب في الصف التاسع في طرابلس، ليبيا.
 تساعده في فهم الدروس، حل التمارين، وتنظيم وقته للدراسة.
 لهجتك ليبية محببة وواضحة.
 
 🚨 قوانين صارمة جداً يجب عليك اتباعها:
-1. الإجابات من الكتب فقط: لديك وصول لعدة كتب مدرسية مرفقة. يجب عليك الإجابة على أي سؤال علمي أو دراسي من محتوى هذه الكتب حصراً.
-2. منع الهلوسة نهائياً: ممنوع منعاً باتاً اختراع إجابات، أو استنتاج معلومات غير موجودة بوضوح في الكتب، أو استخدام معلومات من خارج المقررات المرفقة.
-3. الاعتراف بعدم المعرفة: إذا سألك الطالب سؤالاً دراسياً ولم تجد إجابته بشكل مباشر وصريح في الكتب المرفقة، يجب أن تعتذر بلطف وتقول: "معليش يا أحمد، دورت في الكتب اللي عندي ومالقيتش إجابة واضحة لسؤالك، حاول تتأكد من السؤال أو تسأل الأستاذ".
-4. المحادثة العادية: يمكنك استخدام معرفتك العامة فقط في الدردشة العادية، الترحيب، النصائح العامة لتنظيم الوقت، والتشجيع المستمر."""
+1. الإجابات من الكتاب فقط: لديك وصول لكتاب المادة المرفق. يجب عليك الإجابة على أي سؤال دراسي من محتوى هذا الكتاب حصراً.
+2. منع الهلوسة نهائياً: ممنوع منعاً باتاً اختراع إجابات، أو استنتاج معلومات غير موجودة بوضوح في الكتاب، أو استخدام معلومات من خارجه.
+3. الاعتراف بعدم المعرفة: إذا سألك الطالب سؤالاً دراسياً ولم تجد إجابته بشكل مباشر وصريح في الكتاب المرفق، يجب أن تعتذر بلطف وتقول: "معليش يا أحمد، دورت في كتاب المادة ومالقيتش إجابة واضحة لسؤالك، حاول تتأكد من السؤال أو تسأل الأستاذ".
+4. المحادثة العادية: يمكنك استخدام معرفتك العامة فقط في الدردشة العادية والتشجيع وتنسيق الوقت."""
 
-# 4. قائمة أسماء الكتب المدرسية
-BOOKS_LIST = [
-    "arabic_grade9.pdf",
-    "computer_Science_grade9.pdf",
-    "geography_grade9.pdf",
-    "history_grade9.pdf",
-    "islamic_grade9.pdf",
-    "math_grade9.pdf",
-    "national_grade9.pdf",
-    "science_grade9.pdf",
-    "science_student_p1_garde9.pdf",
-    "science_student_p2_garde9.pdf"
-]
-
-# مصفوفة لحفظ مراجع الكتب اللي تم رفعها
-uploaded_books = []
+# قاموس ديناميكي لحفظ مراجع الكتب بعد رفعها
+uploaded_books = {}
 
 @client.event
 async def on_ready():
     global uploaded_books
     print(f'✅ البوت {client.user} جاهز ومتصل!')
     
-    # التأكد من عدم إعادة رفع الكتب إذا فصل البوت واتصل من جديد
     if not uploaded_books:
-        print("⏳ جاري رفع الكتب المدرسية إلى Gemini... (هذه العملية قد تستغرق بعض الوقت)")
-        for book_name in BOOKS_LIST:
-            if os.path.exists(book_name):
-                try:
-                    uploaded_file = ai_client.files.upload(file=book_name)
-                    uploaded_books.append(uploaded_file)
-                    print(f"🎉 تم تحميل الكتاب بنجاح: {book_name}")
-                except Exception as e:
-                    print(f"⚠️ فشل رفع الكتاب {book_name}: {e}")
-            else:
-                print(f"⚠️ الملف {book_name} غير موجود في المجلد. سيتم تخطيه.")
-        print("📚 تم الانتهاء من تجهيز جميع الكتب!")
+        print("⏳ جاري البحث عن الكتب ورفعها تلقائياً...")
+        
+        # البحث عن كل ملفات الـ PDF في المجلد الحالي
+        pdf_files = [f for f in os.listdir('.') if f.lower().endswith('.pdf')]
+        
+        for book_name in pdf_files:
+            # تحويل اسم الملف إلى اسم قناة (بدون .pdf وبحروف صغيرة)
+            channel_key = book_name.lower().replace('.pdf', '')
+            
+            try:
+                uploaded_file = ai_client.files.upload(file=book_name)
+                uploaded_books[channel_key] = uploaded_file
+                print(f"🎉 تم ربط الكتاب: {book_name} ليتم استخدامه في القناة التي تحتوي على الاسم: {channel_key}")
+            except Exception as e:
+                print(f"⚠️ فشل رفع الكتاب {book_name}: {e}")
+                
+        print("📚 تم الانتهاء من تجهيز جميع الكتب الموجودة!")
 
 @client.event
 async def on_message(message):
@@ -78,7 +68,17 @@ async def on_message(message):
         user_msg = message.clean_content.replace(f'@{client.user.name}', '').strip()
         user_id = str(message.author.id)
         
-        # 1. معالجة الملف الصوتي إن وجد
+        # استخراج اسم القناة وتحويله لحروف صغيرة للمقارنة
+        channel_name = message.channel.name.lower() if not isinstance(message.channel, discord.DMChannel) else "خاص"
+        
+        # تحديد الكتاب بناءً على اسم القناة تلقائياً
+        selected_book = None
+        for key, book_file in uploaded_books.items():
+            if key in channel_name:  # لو اسم القناة يحتوي على اسم الملف (مثلا math_grade9)
+                selected_book = book_file
+                break
+
+        # معالجة الملف الصوتي إن وجد
         gemini_audio_file = None
         if message.attachments:
             for att in message.attachments:
@@ -103,7 +103,7 @@ async def on_message(message):
         db_msg = user_msg if user_msg else "[رسالة صوتية]"
 
         try:
-            # 2. جلب المحادثات السابقة
+            # جلب المحادثات السابقة
             history_data = []
             try:
                 response = supabase.table('chat_history').select("*").eq("user_id", user_id).order("created_at", desc=True).limit(6).execute()
@@ -111,7 +111,7 @@ async def on_message(message):
             except Exception as e:
                 print(f"Supabase Fetch Error: {e}")
 
-            # 3. حفظ رسالة المستخدم الحالية
+            # حفظ رسالة المستخدم
             try:
                 supabase.table('chat_history').insert({
                     "user_id": user_id,
@@ -121,7 +121,7 @@ async def on_message(message):
             except Exception as e:
                 print(f"Supabase Insert Error: {e}")
 
-            # 4. بناء الذاكرة (History)
+            # بناء الذاكرة (History)
             history_contents = []
             last_role = None
             for row in history_data:
@@ -142,7 +142,7 @@ async def on_message(message):
                     )
                     last_role = current_role
 
-            # 5. إنشاء جلسة المحادثة
+            # إنشاء جلسة المحادثة
             chat = ai_client.chats.create(
                 model='gemini-3.6-flash',
                 config=types.GenerateContentConfig(
@@ -151,12 +151,11 @@ async def on_message(message):
                 history=history_contents
             )
 
-            # 6. تجهيز الطلب الحالي 
+            # تجهيز الطلب (تمرير كتاب المادة المحددة فقط)
             current_message_payload = []
             
-            # تمرير كل الكتب المرفوعة دفعة واحدة للنموذج
-            if uploaded_books:
-                current_message_payload.extend(uploaded_books)
+            if selected_book:
+                current_message_payload.append(selected_book)
                 
             if gemini_audio_file:
                 current_message_payload.append(gemini_audio_file)
@@ -164,13 +163,17 @@ async def on_message(message):
             if user_msg:
                 current_message_payload.append(user_msg)
             elif gemini_audio_file and not user_msg:
-                current_message_payload.append("استمع للرسالة الصوتية وأجب عليها بالاعتماد على الكتب المدرسية المرفقة فقط.")
+                current_message_payload.append("استمع للرسالة الصوتية وأجب عليها بالاعتماد على الكتاب المرفق فقط.")
 
-            # 7. إرسال الطلب
+            # إرسال الطلب وتنفيذه في الخلفية لتفادي التجميد
             gemini_response = await asyncio.to_thread(chat.send_message, current_message_payload)
             reply_text = gemini_response.text
 
-            # 8. حفظ الرد
+            # إضافة ملاحظة لو القناة مش مربوطة بكتاب
+            if not selected_book and "خاص" not in channel_name:
+                reply_text += "\n\n*(ملاحظة من البوت: انتبه يا أحمد، القناة هذي مش مربوطة بكتاب، تأكد من اسم القناة باش نقدر نجاوبك من المنهج!)*"
+
+            # حفظ الرد
             try:
                 supabase.table('chat_history').insert({
                     "user_id": user_id,
@@ -180,7 +183,7 @@ async def on_message(message):
             except Exception as e:
                 print(f"Supabase Save Reply Error: {e}")
 
-            # 9. توليد الصوت وإرسال الرد
+            # توليد الصوت وإرسال الرد
             audio_reply_path = f"reply_{message.id}.mp3"
             try:
                 communicate = edge_tts.Communicate(reply_text, "ar-LY-OmarNeural")
