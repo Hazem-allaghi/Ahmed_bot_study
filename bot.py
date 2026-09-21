@@ -1,4 +1,5 @@
 import os
+import asyncio
 import discord
 import edge_tts
 from supabase import create_client, Client
@@ -166,7 +167,7 @@ async def on_message(message):
                 current_message_payload.append("استمع للرسالة الصوتية وأجب عليها بالاعتماد على الكتب المدرسية المرفقة فقط.")
 
             # 7. إرسال الطلب
-            gemini_response = chat.send_message(current_message_payload)
+            gemini_response = await asyncio.to_thread(chat.send_message, current_message_payload)
             reply_text = gemini_response.text
 
             # 8. حفظ الرد
