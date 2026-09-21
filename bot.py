@@ -19,36 +19,59 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
+# 3. التعليمات الصارمة لمنع الهلوسة
 SYSTEM_INSTRUCTION = """أنت مساعد دراسي ذكي ومفيد لأحمد، طالب في الصف التاسع في طرابلس، ليبيا.
 تساعده في فهم الدروس، حل التمارين، وتنظيم وقته للدراسة.
 لهجتك ليبية محببة وواضحة.
-إذا تم إرفاق كتاب أو ملف في المحادثة، اعتمد عليه كمرجع أساسي لإجابة الطالب."""
 
-# متغير عام لحفظ مرجع الكتاب
-uploaded_book_file = None
+🚨 قوانين صارمة جداً يجب عليك اتباعها:
+1. الإجابات من الكتب فقط: لديك وصول لعدة كتب مدرسية مرفقة. يجب عليك الإجابة على أي سؤال علمي أو دراسي من محتوى هذه الكتب حصراً.
+2. منع الهلوسة نهائياً: ممنوع منعاً باتاً اختراع إجابات، أو استنتاج معلومات غير موجودة بوضوح في الكتب، أو استخدام معلومات من خارج المقررات المرفقة.
+3. الاعتراف بعدم المعرفة: إذا سألك الطالب سؤالاً دراسياً ولم تجد إجابته بشكل مباشر وصريح في الكتب المرفقة، يجب أن تعتذر بلطف وتقول: "معليش يا أحمد، دورت في الكتب اللي عندي ومالقيتش إجابة واضحة لسؤالك، حاول تتأكد من السؤال أو تسأل الأستاذ".
+4. المحادثة العادية: يمكنك استخدام معرفتك العامة فقط في الدردشة العادية، الترحيب، النصائح العامة لتنظيم الوقت، والتشجيع المستمر."""
+
+# 4. قائمة أسماء الكتب المدرسية
+BOOKS_LIST = [
+    "arabic_grade9.pdf",
+    "computer_Science_grade9.pdf",
+    "geography_grade9.pdf",
+    "history_grade9.pdf",
+    "islamic_grade9.pdf",
+    "math_grade9.pdf",
+    "national_grade9.pdf",
+    "science_grade9.pdf",
+    "science_student_p1_garde9.pdf",
+    "science_student_p2_garde9.pdf"
+]
+
+# مصفوفة لحفظ مراجع الكتب اللي تم رفعها
+uploaded_books = []
 
 @client.event
 async def on_ready():
-    global uploaded_book_file
-    print(f'✅ البوت {client.user} جاهز ومتصل، ويدعم الصوت والنص!')
+    global uploaded_books
+    print(f'✅ البوت {client.user} جاهز ومتصل!')
     
-    book_path = "math_grade9.pdf" # تأكد من اسم الملف في GitHub
-    if os.path.exists(book_path):
-        try:
-            print("⏳ جاري رفع الكتاب المدرسي إلى Gemini...")
-            uploaded_book_file = ai_client.files.upload(file=book_path)
-            print(f"🎉 تم تحميل الكتاب بنجاح: {uploaded_book_file.name}")
-        except Exception as e:
-            print(f"⚠️ فشل رفع الكتاب: {e}")
-    else:
-        print(f"⚠️ الملف {book_path} غير موجود.")
+    # التأكد من عدم إعادة رفع الكتب إذا فصل البوت واتصل من جديد
+    if not uploaded_books:
+        print("⏳ جاري رفع الكتب المدرسية إلى Gemini... (هذه العملية قد تستغرق بعض الوقت)")
+        for book_name in BOOKS_LIST:
+            if os.path.exists(book_name):
+                try:
+                    uploaded_file = ai_client.files.upload(file=book_name)
+                    uploaded_books.append(uploaded_file)
+                    print(f"🎉 تم تحميل الكتاب بنجاح: {book_name}")
+                except Exception as e:
+                    print(f"⚠️ فشل رفع الكتاب {book_name}: {e}")
+            else:
+                print(f"⚠️ الملف {book_name} غير موجود في المجلد. سيتم تخطيه.")
+        print("📚 تم الانتهاء من تجهيز جميع الكتب!")
 
 @client.event
 async def on_message(message):
     if message.author == client.user:
         return
     
-    # الرد فقط عند المنشن أو في الرسائل الخاصة (DM)
     if client.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
         
         user_msg = message.clean_content.replace(f'@{client.user.name}', '').strip()
@@ -79,7 +102,7 @@ async def on_message(message):
         db_msg = user_msg if user_msg else "[رسالة صوتية]"
 
         try:
-            # 2. جلب المحادثات السابقة من Supabase
+            # 2. جلب المحادثات السابقة
             history_data = []
             try:
                 response = supabase.table('chat_history').select("*").eq("user_id", user_id).order("created_at", desc=True).limit(6).execute()
@@ -97,7 +120,7 @@ async def on_message(message):
             except Exception as e:
                 print(f"Supabase Insert Error: {e}")
 
-            # 4. بناء الذاكرة (History) بتنسيق خالي من الأخطاء
+            # 4. بناء الذاكرة (History)
             history_contents = []
             last_role = None
             for row in history_data:
@@ -107,7 +130,6 @@ async def on_message(message):
                 if not content_text:
                     continue
                     
-                # منع خطأ Gemini عند تكرار نفس الدور مرتين متتاليتين
                 if current_role == last_role and history_contents:
                     history_contents[-1].parts[0].text += f"\n{content_text}"
                 else:
@@ -119,7 +141,7 @@ async def on_message(message):
                     )
                     last_role = current_role
 
-            # 5. إنشاء جلسة محادثة ذكية (تُخفي تحذير AFC تلقائياً)
+            # 5. إنشاء جلسة المحادثة
             chat = ai_client.chats.create(
                 model='gemini-3.6-flash',
                 config=types.GenerateContentConfig(
@@ -128,11 +150,12 @@ async def on_message(message):
                 history=history_contents
             )
 
-            # 6. تجهيز الطلب الحالي (ملفات + نص) ورميها مباشرة للمكتبة لتعالجها
+            # 6. تجهيز الطلب الحالي 
             current_message_payload = []
             
-            if uploaded_book_file:
-                current_message_payload.append(uploaded_book_file)
+            # تمرير كل الكتب المرفوعة دفعة واحدة للنموذج
+            if uploaded_books:
+                current_message_payload.extend(uploaded_books)
                 
             if gemini_audio_file:
                 current_message_payload.append(gemini_audio_file)
@@ -140,13 +163,13 @@ async def on_message(message):
             if user_msg:
                 current_message_payload.append(user_msg)
             elif gemini_audio_file and not user_msg:
-                current_message_payload.append("استمع للرسالة الصوتية وأجب عليها من الكتاب المدرسي.")
+                current_message_payload.append("استمع للرسالة الصوتية وأجب عليها بالاعتماد على الكتب المدرسية المرفقة فقط.")
 
             # 7. إرسال الطلب
             gemini_response = chat.send_message(current_message_payload)
             reply_text = gemini_response.text
 
-            # 8. حفظ رد البوت في Supabase
+            # 8. حفظ الرد
             try:
                 supabase.table('chat_history').insert({
                     "user_id": user_id,
@@ -156,7 +179,7 @@ async def on_message(message):
             except Exception as e:
                 print(f"Supabase Save Reply Error: {e}")
 
-            # 9. توليد الصوت وإرسال الرد لأحمد
+            # 9. توليد الصوت وإرسال الرد
             audio_reply_path = f"reply_{message.id}.mp3"
             try:
                 communicate = edge_tts.Communicate(reply_text, "ar-LY-OmarNeural")
@@ -178,6 +201,6 @@ async def on_message(message):
 
         except Exception as e:
             print(f"General Error: {e}")
-            await message.reply(f"معليش يا أحمد، واجهتني مشكلة تقنية صغيرة توا: {e}")
+            await message.reply(f"معليش يا أحمد، واجهتني مشكلة تقنية صغيرة توا، دقيقة ونكون معاك!")
 
 client.run(DISCORD_TOKEN)
