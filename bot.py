@@ -56,21 +56,16 @@ async def on_message(message):
         user_id = str(message.author.id)
         
         # معالجة الملف الصوتي إن وجد
-        audio_part = None
+        gemini_audio_file = None
         if message.attachments:
             for att in message.attachments:
                 if att.content_type and att.content_type.startswith('audio'):
                     audio_path = f"temp_{message.id}.ogg"
                     await att.save(audio_path)
                     try:
-                        gemini_audio = ai_client.files.upload(
+                        gemini_audio_file = ai_client.files.upload(
                             file=audio_path,
                             config={'mime_type': 'audio/ogg'}
-                        )
-                        # التعديل الصحيح لاستدعاء Part.from_uri
-                        audio_part = types.Part.from_uri(
-                            gemini_audio.uri,
-                            mime_type=gemini_audio.mime_type or 'audio/ogg'
                         )
                     except Exception as e:
                         print(f"Error uploading audio: {e}")
@@ -79,7 +74,7 @@ async def on_message(message):
                             os.remove(audio_path)
                     break
 
-        if not user_msg and not audio_part:
+        if not user_msg and not gemini_audio_file:
             return
 
         db_msg = user_msg if user_msg else "[رسالة صوتية]"
@@ -119,24 +114,19 @@ async def on_message(message):
             # تجهيز الطلب الحالي للمستخدم
             current_parts = []
 
-            # إضافة الكتاب كـ Part إن وجد (التعديل الصحيح هنا)
+            # إضافة الكتاب كـ File Object مباشرة (طريقة مكتبة google-genai الرسمية)
             if uploaded_book_file:
-                current_parts.append(
-                    types.Part.from_uri(
-                        uploaded_book_file.uri,
-                        mime_type=uploaded_book_file.mime_type or 'application/pdf'
-                    )
-                )
+                current_parts.append(uploaded_book_file)
 
-            # إضافة الصوت إن وجد
-            if audio_part:
-                current_parts.append(audio_part)
+            # إضافة الملف الصوتي كـ File Object مباشرة
+            if gemini_audio_file:
+                current_parts.append(gemini_audio_file)
 
             # إضافة النص
             if user_msg:
                 current_parts.append(types.Part.from_text(text=user_msg))
-            elif audio_part and not user_msg:
-                current_parts.append(types.Part.from_text(text="استمع للرسالة الصوتية وأجب عليها."))
+            elif gemini_audio_file and not user_msg:
+                current_parts.append(types.Part.from_text(text="استمع للرسالة الصوتية وأجب عليها من الكتاب المدرسي."))
 
             contents.append(
                 types.Content(
