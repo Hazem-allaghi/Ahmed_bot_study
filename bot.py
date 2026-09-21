@@ -63,7 +63,14 @@ async def on_message(message):
     if message.author == client.user:
         return
     
-    if client.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
+    # استخراج اسم القناة
+    channel_name = message.channel.name.lower() if not isinstance(message.channel, discord.DMChannel) else "خاص"
+    
+    # التحقق هل القناة هذي مربوطة بكتاب أو لا
+    is_study_channel = any(key in channel_name for key in uploaded_books.keys())
+
+    # البوت حيرد لو: القناة مخصصة للقراية، أو رسالة خاصة، أو درتله منشن
+    if is_study_channel or client.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
         
         user_msg = message.clean_content.replace(f'@{client.user.name}', '').strip()
         user_id = str(message.author.id)
