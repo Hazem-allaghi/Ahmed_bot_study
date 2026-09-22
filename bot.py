@@ -210,8 +210,13 @@ async def on_message(message):
                 if os.path.exists(audio_reply_path):
                     os.remove(audio_reply_path)
 
+       except discord.errors.NotFound:
+            print("⚠️ ملاحظة: البوت حاول الرد لكن القناة أو الرسالة تم مسحها.")
         except Exception as e:
             print(f"General Error: {e}")
-            await message.reply(f"معليش يا أحمد، واجهتني مشكلة تقنية صغيرة توا، دقيقة ونكون معاك!")
+            try:
+                await message.reply(f"معليش يا أحمد، واجهتني مشكلة تقنية صغيرة توا، دقيقة ونكون معاك!")
+            except:
+                pass
 
 client.run(DISCORD_TOKEN)
