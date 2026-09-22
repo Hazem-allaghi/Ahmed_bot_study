@@ -42,13 +42,10 @@ async def on_ready():
     if not uploaded_books:
         print("⏳ جاري البحث عن الكتب ورفعها تلقائياً...")
         
-        # البحث عن كل ملفات الـ PDF في المجلد الحالي
         pdf_files = [f for f in os.listdir('.') if f.lower().endswith('.pdf')]
         
         for book_name in pdf_files:
-            # تحويل اسم الملف إلى اسم قناة (بدون .pdf وبحروف صغيرة)
             channel_key = book_name.lower().replace('.pdf', '')
-            
             try:
                 uploaded_file = ai_client.files.upload(file=book_name)
                 uploaded_books[channel_key] = uploaded_file
@@ -75,13 +72,10 @@ async def on_message(message):
         user_msg = message.clean_content.replace(f'@{client.user.name}', '').strip()
         user_id = str(message.author.id)
         
-        # استخراج اسم القناة وتحويله لحروف صغيرة للمقارنة
-        channel_name = message.channel.name.lower() if not isinstance(message.channel, discord.DMChannel) else "خاص"
-        
         # تحديد الكتاب بناءً على اسم القناة تلقائياً
         selected_book = None
         for key, book_file in uploaded_books.items():
-            if key in channel_name:  # لو اسم القناة يحتوي على اسم الملف (مثلا math_grade9)
+            if key in channel_name:
                 selected_book = book_file
                 break
 
@@ -158,7 +152,7 @@ async def on_message(message):
                 history=history_contents
             )
 
-            # تجهيز الطلب (تمرير كتاب المادة المحددة فقط)
+            # تجهيز الطلب
             current_message_payload = []
             
             if selected_book:
@@ -172,7 +166,7 @@ async def on_message(message):
             elif gemini_audio_file and not user_msg:
                 current_message_payload.append("استمع للرسالة الصوتية وأجب عليها بالاعتماد على الكتاب المرفق فقط.")
 
-            # إرسال الطلب وتنفيذه في الخلفية لتفادي التجميد
+            # إرسال الطلب وتنفيذه في الخلفية
             gemini_response = await asyncio.to_thread(chat.send_message, current_message_payload)
             reply_text = gemini_response.text
 
@@ -210,7 +204,7 @@ async def on_message(message):
                 if os.path.exists(audio_reply_path):
                     os.remove(audio_reply_path)
 
-       except discord.errors.NotFound:
+        except discord.errors.NotFound:
             print("⚠️ ملاحظة: البوت حاول الرد لكن القناة أو الرسالة تم مسحها.")
         except Exception as e:
             print(f"General Error: {e}")
